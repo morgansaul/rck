@@ -27,7 +27,7 @@
 #endif
 
 // Constants
-#define MAX_PUBKEYS 1000  // Maximum number of pubkeys to process
+#define MAX_PUBKEYS 1024  // Maximum number of pubkeys to process
 
 // Global variables
 time_t program_start_time = time(NULL);
@@ -884,3 +884,4 @@ label_end:
     free(pPntList);
     return 0;
 }
+
