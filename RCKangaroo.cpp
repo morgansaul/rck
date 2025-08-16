@@ -13,6 +13,7 @@
 #include <inttypes.h>
 #include <stdint.h>
 #include <fstream>
+#include <algorithm>
 
 #include "cuda_runtime.h"
 #include "cuda.h"
@@ -62,7 +63,7 @@ char gTamesFileName[1024];
 double gMax;
 bool gGenMode;
 bool gIsOpsLimit;
-int gCurrentPubKeyIndex = 0;  // Track current pubkey being processed
+int gCurrentKeyIndex = 0;  // Track current pubkey being processed
 u8 gGPUs_Mask[MAX_GPU_CNT];
 
 #pragma pack(push, 1)
@@ -70,7 +71,7 @@ struct DBRec {
     u8 x[12];
     u8 d[22];
     u8 type; //0 - tame, 1 - wild1, 2 - wild2
-    u8 pubkey_id; // [ADDED] To track which pubkey this DP belongs to
+    u8 pubkey_id; // To track which pubkey this DP belongs to
 };
 #pragma pack(pop)
 
@@ -282,7 +283,7 @@ void CheckNewPoints() {
                 continue;
             }
             gSolved = true;
-            gCurrentPubKeyIndex = nrec.pubkey_id;
+            gCurrentKeyIndex = nrec.pubkey_id;
             break;
         }
     }
@@ -323,33 +324,32 @@ void ShowStats(u64 tm_start, double exp_ops, double dp_val) {
     int min = (int)(sec % 3600) / 60;
     int remaining_sec = (int)(sec % 60);
 
-    printf("%sSpeed: %d MKeys/s, Err: %d, DPs: %lluK/%lluK, Time: %llud:%02dh:%02dm:%02ds/%llud:%02dh:%02dm:%02ds\r",
-          gGenMode ? "GEN: " : (IsBench ? "BENCH: " : "MAIN: "),
-          speed, gTotalErrors,
-          db.GetBlockCnt() / 1000, est_dps_cnt / 1000,
-          days, hours, min, remaining_sec,
-          exp_days, exp_hours, exp_min, exp_remaining_sec);
+    printf("[%d/%d] Speed: %d MKeys/s | DPs: %lluK | Time: %llud:%02dh:%02dm:%02ds\r",
+          gCurrentKeyIndex + 1, (int)gPubKeys.size(),
+          speed,
+          db.GetBlockCnt() / 1000,
+          days, hours, min, remaining_sec);
 
     fflush(stdout);
 }
 
-bool LoadPubKeys(const char* filename) {
-    std::ifstream file(filename);
-    if (!file) {
-        printf("Failed to open pubkeys file: %s\n", filename);
+bool LoadPubKeysFromFile(const char* path) {
+    std::ifstream f(path);
+    if (!f) {
+        printf("Failed to open pubkeys file: %s\n", path);
         return false;
     }
 
     gPubKeys.clear();
+    EcPoint p;
     std::string line;
-    while (std::getline(file, line)) {
+    while (std::getline(f, line)) {
         // Skip empty lines and comments
         if (line.empty() || line[0] == '#') continue;
 
         // Remove any whitespace
         line.erase(std::remove_if(line.begin(), line.end(), ::isspace), line.end());
 
-        EcPoint p;
         if (p.SetHexStr(line.c_str())) {
             gPubKeys.push_back(p);
             if (gPubKeys.size() >= MAX_PUBKEYS) {
@@ -362,11 +362,11 @@ bool LoadPubKeys(const char* filename) {
     }
 
     if (gPubKeys.empty()) {
-        printf("No valid pubkeys found in file: %s\n", filename);
+        printf("No valid pubkeys found in file: %s\n", path);
         return false;
     }
 
-    printf("Loaded %d pubkeys from %s\n", (int)gPubKeys.size(), filename);
+    printf("Loaded %d pubkeys from %s\n", (int)gPubKeys.size(), path);
     return true;
 }
 
@@ -495,7 +495,7 @@ bool SolvePoints(int Range, int DP, EcInt* pk_res) {
     }
 
     u64 tm_stats = GetTickCount64();
-    while (!gSolved) {
+    while (!gSolved && !gIsOpsLimit) {
         CheckNewPoints();
     
     #ifdef _WIN32
@@ -504,16 +504,10 @@ bool SolvePoints(int Range, int DP, EcInt* pk_res) {
         usleep(5000);
     #endif
     
-        if (GetTickCount64() - tm_stats > 5000) {
-            printf("Checked %d/%d pubkeys\n", gCurrentPubKeyIndex+1, (int)gPubKeys.size());
+        if (GetTickCount64() - tm_stats > 10000) {
+            printf("Keys checked: %d/%d\n", gCurrentKeyIndex + 1, (int)gPubKeys.size());
             ShowStats(tm0, ops, dp_val);
             tm_stats = GetTickCount64();
-        }
-    
-        if ((MaxTotalOps > 0.0) && (PntTotalOps > MaxTotalOps)) {
-            gIsOpsLimit = true;
-            printf("Operations limit reached\n");
-            break;
         }
     }
 
@@ -697,7 +691,7 @@ bool ParseCommandLine(int argc, char* argv[]) {
                 printf("error: missed value after -pubkeys option\r\n");
                 return false;
             }
-            if (!LoadPubKeys(argv[ci++])) {
+            if (!LoadPubKeysFromFile(argv[ci++])) {
                 printf("error: failed to load pubkeys from file\r\n");
                 return false;
             }
@@ -826,7 +820,7 @@ int main(int argc, char* argv[]) {
         
         pk_found.AddModP(gStart);
         EcPoint tmp = ec.MultiplyG(pk_found);
-        if (!tmp.IsEqual(gPubKeys[gCurrentPubKeyIndex])) {
+        if (!tmp.IsEqual(gPubKeys[gCurrentKeyIndex])) {
             printf("FATAL ERROR: SolvePoints found incorrect key\r\n");
             goto label_end;
         }
@@ -834,10 +828,10 @@ int main(int argc, char* argv[]) {
         char s[100];
         pk_found.GetHexStr(s);
         trim_leading_zeros(s);
-        printf("\r\nPRIVATE KEY FOUND FOR PUBKEY %d: %s\r\n\r\n", gCurrentPubKeyIndex+1, s);
+        printf("\r\nPRIVATE KEY FOUND FOR PUBKEY %d: %s\r\n\r\n", gCurrentKeyIndex+1, s);
         FILE* fp = fopen("RESULTS.TXT", "a");
         if (fp) {
-            fprintf(fp, "PUBKEY %d PRIVATE KEY: %s\n", gCurrentPubKeyIndex+1, s);
+            fprintf(fp, "PUBKEY %d PRIVATE KEY: %s\n", gCurrentKeyIndex+1, s);
             fclose(fp);
         }
         else {
