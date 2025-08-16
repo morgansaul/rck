@@ -1,9 +1,3 @@
-// This file is a part of RCKangaroo software
-// (c) 2024, RetiredCoder (RC)
-// License: GPLv3, see "LICENSE.TXT" file
-// https://github.com/RetiredC
-
-
 #pragma once 
 
 #pragma warning(disable : 4996)
@@ -17,13 +11,11 @@ typedef short i16;
 typedef unsigned char u8;
 typedef char i8;
 
-
-
 #define MAX_GPU_CNT			32
+#define MAX_PUBKEYS			1024  // [ADD] Max pubkeys to process in parallel
 
 //must be divisible by MD_LEN
 #define STEP_CNT			1000
-
 #define JMP_CNT				512
 
 //use different options for cards older than RTX 40xx
@@ -52,20 +44,25 @@ typedef char i8;
 
 #define GPU_DP_SIZE			48
 #define MAX_DP_CNT			(256 * 1024)
-
 #define JMP_MASK			(JMP_CNT-1)
-
 #define DPTABLE_MAX_CNT		16
-
 #define MAX_CNT_LIST		(512 * 1024)
 
+// [ADD] Extended DP flags
 #define DP_FLAG				0x8000
 #define INV_FLAG			0x4000
 #define JMP2_FLAG			0x2000
+#define PKID_MASK			0x0FFF  // [ADD] 12 bits for pubkey ID (supports 4096 keys)
 
 #define MD_LEN				10
 
-//#define DEBUG_MODE
+// [ADD] PubKey structure for GPU
+#pragma pack(push, 1)
+struct TPubKey {
+	u64 x[4];  // 256-bit X coordinate
+	u64 y[4];  // 256-bit Y coordinate
+};
+#pragma pack(pop)
 
 //gpu kernel parameters
 struct TKparams
@@ -79,19 +76,33 @@ struct TKparams
 	u64 DP;
 	u32* DPs_out;
 	u64* Jumps1; //x(32b), y(32b), d(32b)
-	u64* Jumps2; //x(32b), y(32b), d(32b)
-	u64* Jumps3; //x(32b), y(32b), d(32b)
-	u64* JumpsList; //list of all performed jumps, grouped by warp(32) every 8 groups (from PNT_GROUP_CNT). Each jump is 2 bytes: 10bit jump index + flags: INV_FLAG, DP_FLAG, JMP2_FLAG
+	u64* Jumps2; 
+	u64* Jumps3;
+	u64* JumpsList;
 	u32* DPTable;
 	u32* L1S2;
 	u64* LastPnts;
 	u64* LoopTable;
 	u32* dbg_buf;
 	u32* LoopedKangs;
-	bool IsGenMode; //tames generation mode
+	bool IsGenMode;
+	
+	// [ADD] Multi-pubkey support
+	TPubKey* PubKeys;  // GPU memory pointer
+	u32 PubKeyCount;   // Number of loaded pubkeys
 
 	u32 KernelA_LDS_Size;
 	u32 KernelB_LDS_Size;
 	u32 KernelC_LDS_Size;	
 };
 
+// [ADD] Extended DP record structure
+#pragma pack(push, 1)
+struct DBRec
+{
+	u8 x[12];    // DP x-coordinate prefix
+	u8 d[22];    // Distance
+	u8 type;     // Kangaroo type
+	u16 pubkey_id; // [ADD] Which pubkey this DP belongs to (uses PKID_MASK)
+};
+#pragma pack(pop)
