@@ -5,6 +5,7 @@
 #include <vector>
 #include <fstream>
 #include "defs.h"
+#include "Ec.h"
 
 #ifdef _WIN32
     #include <Windows.h>
@@ -45,8 +46,8 @@ private:
 public:
     CriticalSection() { INIT_CS(&cs_body); };
     ~CriticalSection() { DELETE_CS(&cs_body); };
-    void Enter() { LOCK_CS(&cs_body); };
-    void Leave() { UNLOCK_CS(&cs_body); };
+    void Enter() { LOCK_CS(&cs.cs_body); };
+    void Leave() { UNLOCK_CS(&cs.cs_body); };
 };
 
 #pragma pack(push, 1)
@@ -124,13 +125,13 @@ inline bool PubKeyContainer::LoadFromFile(const char* path) {
     Clear();
     std::string line;
     TPubKey key;
-    LOCK_CS(&cs_body);
+    LOCK_CS(&cs.cs_body);
     while (std::getline(file, line)) {
         if (ParsePubKeyLine(line.c_str(), key)) {
             keys.push_back(key);
             if (keys.size() >= MAX_PUBKEYS) break;
         }
     }
-    UNLOCK_CS(&cs_body);
+    UNLOCK_CS(&cs.cs_body);
     return !keys.empty();
 }
