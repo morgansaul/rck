@@ -12,12 +12,15 @@ extern bool gGenMode;
 // Device-side pubkey check
 __device__ bool CheckPointAgainstAllTargets(const EcPoint& point, const TPubKey* targets, int count) {
     for(int i = 0; i < count; i++) {
-        if(point.x.data[0] == targets[i].x[0] && 
-           point.x.data[1] == targets[i].x[1] &&
-           point.x.data[2] == targets[i].x[2] &&
-           point.x.data[3] == targets[i].x[3]) {
-            return true;
+        bool match = true;
+        #pragma unroll
+        for(int j = 0; j < 4; j++) {
+            if(point.x.data[j] != targets[i].x[j]) {
+                match = false;
+                break;
+            }
         }
+        if(match) return true;
     }
     return false;
 }
@@ -198,13 +201,12 @@ bool RCGpuKang::Prepare(EcPoint* _PntsToSolve, int _PubKeyCount, int _Range, int
         return false;
     }
     
-    TPubKey* hostPubKeys = new TPubKey[PubKeyCount];
+    std::vector<TPubKey> hostPubKeys(PubKeyCount);
     for(int i = 0; i < PubKeyCount; i++) {
         memcpy(hostPubKeys[i].x, PntsToSolve[i].x.data, 32);
         memcpy(hostPubKeys[i].y, PntsToSolve[i].y.data, 32);
     }
-    err = cudaMemcpy(Kparams.PubKeys, hostPubKeys, pubkeysSize, cudaMemcpyHostToDevice);
-    delete[] hostPubKeys;
+    err = cudaMemcpy(Kparams.PubKeys, hostPubKeys.data(), pubkeysSize, cudaMemcpyHostToDevice);
     if (err != cudaSuccess) {
         printf("GPU %d Copy PubKeys failed: %s\n", CudaIndex, cudaGetErrorString(err));
         return false;
@@ -325,7 +327,7 @@ bool RCGpuKang::Start() {
     NegPntHalfRange = PntHalfRange;
     NegPntHalfRange.y.NegModP();
 
-    // Modified for multiple pubkeys
+    // Initialize for multiple pubkeys
     PntA = new EcPoint[PubKeyCount];
     PntB = new EcPoint[PubKeyCount];
     for (int i = 0; i < PubKeyCount; i++) {
@@ -447,8 +449,9 @@ void RCGpuKang::Execute() {
                 break;
             }
             for (int i = 0; i < cnt; i++) {
-                int pubkey_id = DPs_out[i * (GPU_DP_SIZE/4) + 10] & PKID_MASK;  // Extract pubkey ID
-                AddPointsToList(DPs_out + i * (GPU_DP_SIZE/4), 1, pnt_cnt, pubkey_id);
+                u32* dp = DPs_out + i * (GPU_DP_SIZE/4);
+                int pubkey_id = (dp[9] >> 16) & 0xFFFF; // Extract stored pubkey ID
+                AddPointsToList(dp, 1, pnt_cnt, pubkey_id);
             }
         }
 
